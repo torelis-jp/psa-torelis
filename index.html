@@ -367,12 +367,27 @@
     }).join('');
   }
 
+  // 画像を追加時にbase64化して保持(出力時の取りこぼし防止)
+  function convertImg(item){
+    return new Promise(function(resolve){
+      if(!item || !item.img || item.src){ resolve(); return; }
+      jsonp(apiUrl(), {action:'img', url:item.img})
+        .then(function(r){ if(r && r.dataUri){ item.src=r.dataUri; } resolve(); })
+        .catch(function(){ resolve(); });
+    });
+  }
+  async function convertAll(list, onEach){
+    for(var k=0;k<list.length;k++){ await convertImg(list[k]); if(onEach) onEach(k); }
+  }
+
   function pick(i){
     var it=lastResults[i]; if(!it) return;
     if(items.some(function(x){ return String(x.id)===String(it.id) && x.name===it.name; })){ setStatus(it.name+' は既に表にあります。'); return; }
     if(items.length>=MAX){ setStatus('最大'+MAX+'件までです。',true); return; }
     items.push({id:it.id, code:it.code, name:it.name, img:it.img, imgAlt:it.imgAlt, buy:it.buy, psa:(it.psa!==false)});
-    render(); setStatus(it.name+' を追加しました。');
+    var added=items[items.length-1];
+    render(); setStatus(it.name+' を追加中…画像変換中');
+    convertImg(added).then(function(){ render(); setStatus(it.name+' を追加しました。'); });
   }
 
   function render(){
@@ -384,7 +399,7 @@
     list.forEach(function(it,i){
       var name=(it.name&&String(it.name).trim())? it.name : ('カード '+it.id);
       var thumb=it.img
-        ? '<img class="thumb" data-cdn="'+esc(it.img)+'" data-alt="'+esc(it.imgAlt||'')+'" src="'+esc(it.img)+'" alt="" onerror="imgErr(this)">'
+        ? '<img class="thumb" data-cdn="'+(it.src?'':esc(it.img))+'" data-alt="'+esc(it.imgAlt||'')+'" src="'+esc(it.src||it.img)+'" alt="" onerror="imgErr(this)">'
         : '<div class="noimg"></div>';
       var cell=document.createElement('div');
       cell.className='cell';
@@ -493,8 +508,8 @@
     setStatus('画像を保存中…');
     jsonp(apiUrl(), {action:'img_set', code:items[i].code||'', name:items[i].name||'', url:url}).then(function(r){
       if(r && (r.status==='saved'||r.status==='cleared')){
-        items[i].img = url || items[i].imgAlt || '';
-        render(); setStatus('画像を'+(url?'差し替えました':'自動に戻しました')+'（保存済み）。');
+        items[i].img = url || items[i].imgAlt || ''; items[i].src='';
+        render(); convertImg(items[i]).then(render); setStatus('画像を'+(url?'差し替えました':'自動に戻しました')+'（保存済み）。');
       } else setStatus('画像保存に失敗: '+((r&&r.error)||'不明'),true);
     }).catch(function(e){ setStatus('画像保存に失敗: '+e.message,true); });
   }
@@ -510,7 +525,8 @@
       if(r && r.status==='saved'){
         var it=r.item;
         items.push({id:it.id, code:it.code, name:it.name, img:it.img, imgAlt:it.imgAlt, buy:it.buy, psa:!!it.psa});
-        render(); setStatus(name+' を追加・保存しました（検索にも出ます）。');
+        var added=items[items.length-1];
+        render(); convertImg(added).then(function(){ render(); setStatus(name+' を追加・保存しました（検索にも出ます）。'); });
       } else setStatus('保存失敗: '+((r&&r.error)||'不明'),true);
     }).catch(function(e){ setStatus('保存失敗: '+e.message,true); });
   }
@@ -530,7 +546,8 @@
     jsonp(apiUrl(), {action:'tpl_load', name:name}).then(function(d){
       if(d.error){ setStatus('読込失敗: '+d.error,true); return; }
       items=(d.items||[]); render();
-      setStatus('テンプレート「'+name+'」を読み込みました（'+items.length+'件・最新価格）。');
+      setStatus('テンプレート「'+name+'」を読込・画像変換中…（0/'+items.length+'）');
+      convertAll(items, function(k){ render(); setStatus('画像変換中…（'+(k+1)+'/'+items.length+'）'); }).then(function(){ render(); setStatus('テンプレート「'+name+'」を読み込みました（'+items.length+'件）。'); });
     }).catch(function(e){ setStatus('読込失敗: '+e.message,true); });
   }
   function tplPayload(){ return JSON.stringify(items.slice(0,MAX).map(function(x){ return {code:x.code||'', name:x.name||'', psa:!!x.psa, buy:(x.psa? x.buy : undefined)}; })); }
@@ -606,12 +623,15 @@
     setStatus('画像を生成中…（画像を変換中）');
     document.body.classList.add('exporting');
     try{
-      var imgEls=document.querySelectorAll('#rows img.thumb');
-      await Promise.all(Array.prototype.map.call(imgEls, function(el){
-        var cdn=el.getAttribute('data-cdn'); if(!cdn) return Promise.resolve();
-        return jsonp(apiUrl(), {action:'img', url:cdn})
-          .then(function(r){ if(r && r.dataUri){ el.src=r.dataUri; } }).catch(function(){});
-      }));
+      // 未変換の画像だけ、順番に変換(+失敗時1回リトライ)して確実に焼く
+      var imgEls=Array.prototype.slice.call(document.querySelectorAll('#rows img.thumb'));
+      for(var qi=0; qi<imgEls.length; qi++){
+        var el=imgEls[qi]; var cdn=el.getAttribute('data-cdn'); if(!cdn) continue;
+        var ok=false;
+        for(var attempt=0; attempt<2 && !ok; attempt++){
+          try{ var r=await jsonp(apiUrl(), {action:'img', url:cdn}); if(r && r.dataUri){ el.src=r.dataUri; ok=true; } }catch(e){}
+        }
+      }
       await fontsReady();
       var board=document.getElementById('board');
       var canvas=await html2canvas(board,{ scale:1, width:1240, height:1754, useCORS:true, backgroundColor:'#0b0b0b', logging:false,
