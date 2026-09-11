@@ -250,6 +250,12 @@
   .g4 .pr{font-size:40px !important} .g5 .pr{font-size:33px !important} .g6 .pr{font-size:29px !important}
   .g7 .pr{font-size:25px !important} .g8 .pr{font-size:22px !important} .g9 .pr{font-size:20px !important}
   .pr .y{ font-size:.55em !important; }
+
+  /* ==== PSA: 長い金額を枠内に収める(はみ出し/重なり防止) ==== */
+  .cell{ overflow:hidden; }
+  .pr{ max-width:98% !important; box-sizing:border-box; padding:2px 8px !important;
+       overflow:hidden; white-space:nowrap; }
+  /* 金額は帯の中で自動縮小(長い桁ほど小さく)。CSSだけでは幅追従しないためJSで調整 */
 </style>
 </head>
 <body>
@@ -437,8 +443,26 @@
       wrap.appendChild(cell);
     });
     renderEdit();
+    fitPrices();
   }
   function removeRow(i){ items.splice(i,1); render(); }
+  // 金額が帯からはみ出す場合、フォントを縮めて枠内に収める
+  function fitPrices(){
+    var prs=document.querySelectorAll('#rows .pr');
+    Array.prototype.forEach.call(prs, function(pr){
+      pr.style.fontSize=''; // 一旦CSS既定に戻す
+      var cell=pr.closest('.cell'); if(!cell) return;
+      var max=cell.clientWidth - 6;
+      var guard=0;
+      while(pr.scrollWidth > max && guard < 40){
+        var cur=parseFloat(getComputedStyle(pr).fontSize)||20;
+        pr.style.fontSize=(cur-1)+'px';
+        guard++;
+        if(cur-1 <= 9) break;
+      }
+    });
+  }
+  window.addEventListener('resize', function(){ try{ fitPrices(); }catch(e){} });
   function toggleEdit(){
     document.body.classList.toggle('edit-closed');
     document.getElementById('editToggle').textContent = document.body.classList.contains('edit-closed') ? '◀ 編集' : '▶ 閉じる';
