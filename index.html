@@ -480,15 +480,14 @@
   function fitPrices(){
     var prs=document.querySelectorAll('#rows .pr');
     Array.prototype.forEach.call(prs, function(pr){
-      pr.style.fontSize=''; // 一旦CSS既定に戻す
+      pr.style.removeProperty('font-size');            // CSS既定(!important)に戻す
       var cell=pr.closest('.cell'); if(!cell) return;
-      var max=cell.clientWidth - 6;
+      var max=cell.clientWidth - 8;
+      var cur=parseFloat(getComputedStyle(pr).fontSize)||20;
       var guard=0;
-      while(pr.scrollWidth > max && guard < 40){
-        var cur=parseFloat(getComputedStyle(pr).fontSize)||20;
-        pr.style.fontSize=(cur-1)+'px';
-        guard++;
-        if(cur-1 <= 9) break;
+      // !important指定に勝つため setProperty(...,'important') で縮小
+      while(pr.scrollWidth > max && cur > 8 && guard < 60){
+        cur-=1; pr.style.setProperty('font-size', cur+'px', 'important'); guard++;
       }
     });
   }
@@ -712,6 +711,7 @@
         }
       }
       await fontsReady();
+      fitPrices();
       var board=document.getElementById('board');
       var canvas=await html2canvas(board,{ scale:1, width:1240, height:1754, useCORS:true, backgroundColor:'#0b0b0b', logging:false,
         onclone:function(doc){ var cb=doc.getElementById('board'); if(cb){ cb.style.transform='none'; } } });
