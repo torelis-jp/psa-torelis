@@ -398,17 +398,47 @@
     }).join('');
   }
 
-  // 画像を追加時にbase64化して保持(出力時の取りこぼし防止)
+  // 変換済み画像のブラウザキャッシュ(URL→dataURI)
+  var imgCache={};
+  // 1枚変換(キャッシュ利用)
   function convertImg(item){
     return new Promise(function(resolve){
       if(!item || !item.img || item.src){ resolve(); return; }
+      if(imgCache[item.img]){ item.src=imgCache[item.img]; resolve(); return; }
       jsonp(apiUrl(), {action:'img', url:item.img})
-        .then(function(r){ if(r && r.dataUri){ item.src=r.dataUri; } resolve(); })
+        .then(function(r){ if(r && r.dataUri){ item.src=r.dataUri; imgCache[item.img]=r.dataUri; } resolve(); })
         .catch(function(){ resolve(); });
     });
   }
-  async function convertAll(list, onEach){
-    for(var k=0;k<list.length;k++){ await convertImg(list[k]); if(onEach) onEach(k); }
+  // 複数を一括変換: キャッシュ適用→未変換URLを5枚ずつまとめて(imgs)、3並列で取得
+  async function convertAll(list, onProgress){
+    var total=list.length;
+    function doneNow(){ var c=0; list.forEach(function(it){ if(!it||!it.img||it.src) c++; }); return c; }
+    // キャッシュ適用
+    list.forEach(function(it){ if(it&&it.img&&!it.src&&imgCache[it.img]) it.src=imgCache[it.img]; });
+    if(onProgress) onProgress(doneNow(), total);
+    // 未変換のユニークURL
+    var urls=[], map={};
+    list.forEach(function(it){ if(it&&it.img&&!it.src){ if(!(it.img in map)){ map[it.img]=[]; urls.push(it.img);} map[it.img].push(it); } });
+    if(!urls.length){ render(); return; }
+    // 5枚ずつのチャンク
+    var chunks=[]; for(var i=0;i<urls.length;i+=5) chunks.push(urls.slice(i,i+5));
+    var idx=0;
+    async function worker(){
+      while(idx<chunks.length){
+        var my=chunks[idx++];
+        try{
+          var r=await jsonp(apiUrl(), {action:'imgs', urls:JSON.stringify(my)});
+          var uris=(r&&r.uris)||[];
+          my.forEach(function(u,k){ var du=uris[k]; if(du){ imgCache[u]=du; (map[u]||[]).forEach(function(it){ it.src=du; }); } });
+        }catch(e){}
+        if(onProgress) onProgress(doneNow(), total);
+        render();
+      }
+    }
+    var CONC=3, ws=[]; for(var w=0; w<CONC; w++) ws.push(worker());
+    await Promise.all(ws);
+    render();
   }
 
   function pick(i){
@@ -596,7 +626,7 @@
       if(d.error){ setStatus('読込失敗: '+d.error,true); return; }
       items=(d.items||[]); render();
       setStatus('テンプレート「'+name+'」を読込・画像変換中…（0/'+items.length+'）');
-      convertAll(items, function(k){ render(); setStatus('画像変換中…（'+(k+1)+'/'+items.length+'）'); }).then(function(){ render(); setStatus('テンプレート「'+name+'」を読み込みました（'+items.length+'件）。'); });
+      convertAll(items, function(done,total){ setStatus('画像変換中…（'+done+'/'+total+'）'); }).then(function(){ render(); setStatus('テンプレート「'+name+'」を読み込みました（'+items.length+'件）。'); });
     }).catch(function(e){ setStatus('読込失敗: '+e.message,true); });
   }
   function tplPayload(){ return JSON.stringify(items.slice(0,MAX).map(function(x){ return {code:x.code||'', name:x.name||'', psa:!!x.psa, buy:(x.psa? x.buy : undefined)}; })); }
